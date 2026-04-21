@@ -374,12 +374,15 @@ with tab_spread:
                         spot2_data[wl] = ss2.rename(columns={spot_idx2_col:'Value','Date':'기준일자'})
 
                 # Spot Spread (Spot1 - Spot2)
-                if spot_df is not None and spot_idx1_col and spot_idx2_col:
-                    ss_both = spot_df[(spot_df['Date']>=ws)&(spot_df['Date']<=we)][['Date',spot_idx1_col,spot_idx2_col]].dropna().sort_values('Date')
-                    if len(ss_both)>0:
-                        ss_both = ss_both.rename(columns={'Date':'기준일자'})
-                        ss_both['Spread'] = ss_both[spot_idx1_col] - ss_both[spot_idx2_col]
-                        spot_spread_data[wl] = ss_both[['기준일자','Spread']]
+                if spot_df is not None and spot_idx1_col is not None and spot_idx2_col is not None:
+                    try:
+                        ss_both = spot_df[(spot_df['Date']>=ws)&(spot_df['Date']<=we)][['Date',spot_idx1_col,spot_idx2_col]].dropna().sort_values('Date').reset_index(drop=True)
+                        if len(ss_both)>0:
+                            ss_both = ss_both.rename(columns={'Date':'기준일자'})
+                            ss_both['Spread'] = ss_both[spot_idx1_col].values - ss_both[spot_idx2_col].values
+                            spot_spread_data[wl] = ss_both[['기준일자','Spread']]
+                    except Exception:
+                        pass
 
             def normalize_series(values):
                 """Z-score normalize: mean=0, std=1"""
@@ -497,10 +500,23 @@ with tab_spread:
                     std_v1 = np.std(dV1)
                     std_v2 = np.std(dV2)
 
+                    # Price level stats
+                    std_p1 = np.std(merged['V1'].values)
+                    std_p2 = np.std(merged['V2'].values)
+                    var_p1 = np.var(merged['V1'].values)
+                    var_p2 = np.var(merged['V2'].values)
+                    mean_p1 = np.mean(merged['V1'].values)
+                    mean_p2 = np.mean(merged['V2'].values)
+
                     # Contribution ratio
                     total_var = var_dV1 + var_dV2
                     contrib_v1_pct = var_dV1 / total_var * 100 if total_var > 0 else 50.0
                     contrib_v2_pct = var_dV2 / total_var * 100 if total_var > 0 else 50.0
+
+                    # Price level contribution
+                    total_var_p = var_p1 + var_p2
+                    contrib_p1_pct = var_p1 / total_var_p * 100 if total_var_p > 0 else 50.0
+                    contrib_p2_pct = var_p2 / total_var_p * 100 if total_var_p > 0 else 50.0
 
                     # |ΔV1| > |ΔV2| ratio
                     abs_v1_bigger = np.sum(np.abs(dV1) > np.abs(dV2))
@@ -511,9 +527,15 @@ with tab_spread:
                         'Trading Days': len(dV1),
                         f'Std(Δ{sp_idx1})': round(std_v1, 4),
                         f'Std(Δ{sp_idx2})': round(std_v2, 4),
-                        f'{sp_idx1} 변동 비중': f"{contrib_v1_pct:.1f}%",
-                        f'{sp_idx2} 변동 비중': f"{contrib_v2_pct:.1f}%",
+                        f'{sp_idx1} ΔPrice 변동 비중': f"{contrib_v1_pct:.1f}%",
+                        f'{sp_idx2} ΔPrice 변동 비중': f"{contrib_v2_pct:.1f}%",
                         f'|Δ{sp_idx1}|>|Δ{sp_idx2}| 비율': f"{abs_v1_ratio:.1f}%",
+                        f'Std({sp_idx1})': round(std_p1, 4),
+                        f'Std({sp_idx2})': round(std_p2, 4),
+                        f'Var({sp_idx1})': round(var_p1, 4),
+                        f'Var({sp_idx2})': round(var_p2, 4),
+                        f'{sp_idx1} Price 변동 비중': f"{contrib_p1_pct:.1f}%",
+                        f'{sp_idx2} Price 변동 비중': f"{contrib_p2_pct:.1f}%",
                     })
 
                     # ── 방향 분석 ──
@@ -557,40 +579,81 @@ with tab_spread:
                     })
 
                 if decomp_rows:
-                    # ── A. 변동 크기 분석 ──
-                    st.markdown("#### A. 변동 크기 분석")
-                    st.caption("각 Index의 일별 변동이 Spread 변동에 기여하는 비율")
+                    # ── A-1. 일별 변화량(ΔPrice) 변동 크기 ──
+                    st.markdown("#### A-1. 일별 변화량(ΔPrice) 변동 크기")
+                    st.caption("Std(ΔPrice): 일별 가격 변화의 표준편차. 매일 얼마나 크게 움직이는가.")
                     decomp_df = pd.DataFrame(decomp_rows)
-                    st.dataframe(decomp_df, use_container_width=True)
+                    delta_cols = ['Window', 'Trading Days',
+                                  f'Std(Δ{sp_idx1})', f'Std(Δ{sp_idx2})',
+                                  f'{sp_idx1} ΔPrice 변동 비중', f'{sp_idx2} ΔPrice 변동 비중',
+                                  f'|Δ{sp_idx1}|>|Δ{sp_idx2}| 비율']
+                    st.dataframe(decomp_df[delta_cols], use_container_width=True)
 
                     fig_dc = go.Figure()
                     fig_dc.add_trace(go.Bar(
                         x=decomp_df['Window'],
-                        y=[float(v.replace('%','')) for v in decomp_df[f'{sp_idx1} 변동 비중']],
+                        y=[float(v.replace('%','')) for v in decomp_df[f'{sp_idx1} ΔPrice 변동 비중']],
                         name=sp_idx1, marker_color='#006D36',
-                        text=decomp_df[f'{sp_idx1} 변동 비중'], textposition='outside'
+                        text=decomp_df[f'{sp_idx1} ΔPrice 변동 비중'], textposition='outside'
                     ))
                     fig_dc.add_trace(go.Bar(
                         x=decomp_df['Window'],
-                        y=[float(v.replace('%','')) for v in decomp_df[f'{sp_idx2} 변동 비중']],
+                        y=[float(v.replace('%','')) for v in decomp_df[f'{sp_idx2} ΔPrice 변동 비중']],
                         name=sp_idx2, marker_color='#3498DB',
-                        text=decomp_df[f'{sp_idx2} 변동 비중'], textposition='outside'
+                        text=decomp_df[f'{sp_idx2} ΔPrice 변동 비중'], textposition='outside'
                     ))
                     fig_dc.update_layout(
-                        title=f"Var(Δ) 비중: {sp_idx1} vs {sp_idx2}",
+                        title=f"Var(ΔPrice) 비중: {sp_idx1} vs {sp_idx2}",
                         barmode='group', height=380, template='plotly_white',
                         yaxis_title="변동 비중 (%)", legend=dict(orientation='h', y=-0.15)
                     )
                     fig_dc.add_hline(y=50, line_dash="dash", line_color="gray", opacity=0.4)
                     st.plotly_chart(fig_dc, use_container_width=True)
 
-                    avg_v1 = np.mean([float(v.replace('%','')) for v in decomp_df[f'{sp_idx1} 변동 비중']])
-                    avg_v2 = np.mean([float(v.replace('%','')) for v in decomp_df[f'{sp_idx2} 변동 비중']])
+                    avg_v1 = np.mean([float(v.replace('%','')) for v in decomp_df[f'{sp_idx1} ΔPrice 변동 비중']])
+                    avg_v2 = np.mean([float(v.replace('%','')) for v in decomp_df[f'{sp_idx2} ΔPrice 변동 비중']])
                     avg_ratio = np.mean([float(v.replace('%','')) for v in decomp_df[f'|Δ{sp_idx1}|>|Δ{sp_idx2}| 비율']])
                     mc1, mc2, mc3 = st.columns(3)
-                    mc1.metric(f"{sp_idx1} 평균 변동 비중", f"{avg_v1:.1f}%")
-                    mc2.metric(f"{sp_idx2} 평균 변동 비중", f"{avg_v2:.1f}%")
+                    mc1.metric(f"{sp_idx1} 평균 ΔPrice 비중", f"{avg_v1:.1f}%")
+                    mc2.metric(f"{sp_idx2} 평균 ΔPrice 비중", f"{avg_v2:.1f}%")
                     mc3.metric(f"|Δ{sp_idx1}|>|Δ{sp_idx2}| 평균", f"{avg_ratio:.1f}%")
+
+                    # ── A-2. 가격 수준(Price) 변동 크기 ──
+                    st.markdown("---")
+                    st.markdown("#### A-2. 가격 수준(Price) 변동 크기")
+                    st.caption("Std(Price), Var(Price): 윈도우 내 가격 수준이 얼마나 넓은 범위에서 움직였는가.")
+                    price_cols = ['Window',
+                                  f'Std({sp_idx1})', f'Std({sp_idx2})',
+                                  f'Var({sp_idx1})', f'Var({sp_idx2})',
+                                  f'{sp_idx1} Price 변동 비중', f'{sp_idx2} Price 변동 비중']
+                    st.dataframe(decomp_df[price_cols], use_container_width=True)
+
+                    fig_pv = go.Figure()
+                    fig_pv.add_trace(go.Bar(
+                        x=decomp_df['Window'],
+                        y=[float(v.replace('%','')) for v in decomp_df[f'{sp_idx1} Price 변동 비중']],
+                        name=sp_idx1, marker_color='#006D36',
+                        text=decomp_df[f'{sp_idx1} Price 변동 비중'], textposition='outside'
+                    ))
+                    fig_pv.add_trace(go.Bar(
+                        x=decomp_df['Window'],
+                        y=[float(v.replace('%','')) for v in decomp_df[f'{sp_idx2} Price 변동 비중']],
+                        name=sp_idx2, marker_color='#3498DB',
+                        text=decomp_df[f'{sp_idx2} Price 변동 비중'], textposition='outside'
+                    ))
+                    fig_pv.update_layout(
+                        title=f"Var(Price) 비중: {sp_idx1} vs {sp_idx2}",
+                        barmode='group', height=380, template='plotly_white',
+                        yaxis_title="변동 비중 (%)", legend=dict(orientation='h', y=-0.15)
+                    )
+                    fig_pv.add_hline(y=50, line_dash="dash", line_color="gray", opacity=0.4)
+                    st.plotly_chart(fig_pv, use_container_width=True)
+
+                    avg_p1 = np.mean([float(v.replace('%','')) for v in decomp_df[f'{sp_idx1} Price 변동 비중']])
+                    avg_p2 = np.mean([float(v.replace('%','')) for v in decomp_df[f'{sp_idx2} Price 변동 비중']])
+                    mc1, mc2 = st.columns(2)
+                    mc1.metric(f"{sp_idx1} 평균 Price 비중", f"{avg_p1:.1f}%")
+                    mc2.metric(f"{sp_idx2} 평균 Price 비중", f"{avg_p2:.1f}%")
 
                 if direction_rows:
                     dir_df = pd.DataFrame(direction_rows)
